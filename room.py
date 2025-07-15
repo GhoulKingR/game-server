@@ -1,203 +1,227 @@
+import typing
+import redis
+import json
+import logging
+import multiprocessing
+import time
+import argparse
 from uuid import uuid4
-from fastapi import WebSocket
+from kafka.admin import NewTopic
+from kafka import KafkaProducer, KafkaAdminClient
+
+producer = KafkaProducer(bootstrap_servers="localhost:9092")
+admin_client = KafkaAdminClient(bootstrap_servers="localhost:9092")
+r = redis.Redis(host='localhost', port=6379, decode_responses=True)
+logger = logging.getLogger(__name__)
+
+def configure_logger():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-i", "--info", help="Enable info logger", action="store_true")
+    parser.add_argument("-e", "--error", help="Enable error logger", action="store_true")
+    args = parser.parse_args()
+
+    if args.info:
+        logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
+    if args.info:
+        logging.basicConfig(level=logging.ERROR, format='%(levelname)s: %(message)s')
+
+def _delete_room(room_id: str):
+    try:
+        admin_client = KafkaAdminClient(bootstrap_servers="localhost:9092")
+        r = redis.Redis(host='localhost', port=6379, decode_responses=True)
+
+        admin_client.delete_topics(topics=[room_id])
+        r.delete(room_id)
+
+        logger.info("Room Deleted Successfully")
+
+        admin_client.close()
+        r.close()
+    except:
+        logger.error("An error occured while deleting room")
 
 
-class Room:
-    board = [""] * 9
+def _delete_after_an_hour(room_id: str):
+    configure_logger()
+    logger = logging.getLogger(__name__)
+    logger.info(f"Room ({room_id}) deletion timer started")
 
-    def __init__(self):
-        id = str(uuid4()).split("-")
-        self.id = id[0]
-        self.p1 = id[1]
-        self.p1_ws = None
-        self.p2 = None
-        self.p2_ws = None
-        self.turn = "p1"
+    try:
+        time.sleep(3600)
+        logger.info("Timer is complete")
+        raise Exception()
 
-    def join(self):
-        if self.p2 == None:
-            self.p2 = str(uuid4()).split("-")[1]
-            return True
-
-        return False
-
-    async def handle_action(self, p_id: str, action, ws: WebSocket):
-        match action["type"]:
-            case "chat":
-                if p_id == self.p1:
-                    if self.p2_ws:
-                        await self.p2_ws.send_json(
-                            {"type": "chat", "from": "p1", "message": action["message"]}
-                        )
-                elif self.p2 and p_id == self.p2:
-                    if self.p1_ws:
-                        await self.p1_ws.send_json(
-                            {"type": "chat", "from": "p2", "message": action["message"]}
-                        )
-
-            case "board":
-                await ws.send_json({"type": "board", "board": self.board})
-
-            case "move":
-                if self.board[action["pos"]] != "":
-                    await ws.send_json({"type": "error", "message": "invalid move"})
-                    return False
-
-                if p_id == self.p1:
-                    player = "p1"
-                elif self.p2 and p_id == self.p2:
-                    player = "p2"
-                else:
-                    await ws.send_json(
-                        {
-                            "type": "error",
-                            "message": "you're not a valid player in this room",
-                        }
-                    )
-                    return False
-
-                if self.turn != player:
-                    await ws.send_json(
-                        {
-                            "type": "error",
-                            "message": "It's not your turn",
-                        }
-                    )
-                    return False
+    except:
+        _delete_room(room_id)
 
 
-                self.board[action["pos"]] = player
-                self.turn = "p1" if self.turn == "p2" else "p2"
+def create_room():
+    id = str(uuid4()).split("-")
+    room_id = id[0]
 
-                if self.p1_ws:
-                    await self.p1_ws.send_json({"type": "board", "board": self.board})
-                if self.p2_ws:
-                    await self.p2_ws.send_json({"type": "board", "board": self.board})
+    r.hset(room_id, mapping={
+        "p1": id[1],
+        "p1_connected": 'false',
+        "board": json.dumps([''] * 9),
+        "turn": "p1"
+    })
 
-                await self.check_win()
-                return True
+    new_topic = NewTopic(
+        name=room_id,
+        num_partitions=1,
+        replication_factor=1,
+    )
+    admin_client.create_topics(new_topics=[new_topic], validate_only=False)
 
-            case _:
-                await ws.send_json(
-                    {
-                        "type": "error",
-                        "message": f"{action['type']} is not a valid action",
-                    }
+    multiprocessing.Process(
+        target=_delete_after_an_hour,
+        args=(room_id,)
+    ).start()
+
+    return id[0], id[1]
+
+def cleanup():
+    admin_client.close()
+    r.close()
+    producer.close()
+
+def join_room(room_id: str):
+    if not r.exists(room_id):
+        raise Exception(f"Room {room_id} doesn't exists")
+
+    obj: dict[typing.Any, typing.Any] = r.hgetall(room_id) # pyright: ignore
+    if 'p2' not in obj or obj['p2_connected'] == 'false':
+        p2 = str(uuid4()).split("-")[1]
+        r.hmset(room_id, {
+            "p2": p2,
+            "p2_connected": 'false',
+        })
+        return p2
+
+    raise Exception(f"Room {room_id} is full")
+
+
+def broadcast(room_id: str, msg):
+    producer.send(
+        room_id,
+        value=json.dumps(msg).encode('utf-8')
+    )
+
+def connect(room_id: str, p_id: str):
+    if not r.exists(room_id):
+        raise Exception(f"Room {room_id} doesn't exists")
+
+    obj: dict[typing.Any, typing.Any] = r.hgetall(room_id) # pyright: ignore
+
+    if p_id == obj['p1']:
+        player = 'p1'
+    elif p_id == obj['p2']:
+        player = 'p2'
+    else:
+        raise Exception("You're not a valid player in this room")
+
+    if obj[f'{player}_connected'] == 'true':
+        raise Exception("You may still be connected elsewhere")
+
+    r.hset(room_id, f'{player}_connected', 'true')
+    broadcast(room_id, {"type": "chat", "from": "system", "message": f"{player} is connected"})
+    return True
+
+
+class Board(Exception):
+    pass
+
+def handle_action(p_id: str, room_id: str, action):
+    if not r.exists(room_id):
+        raise Exception(f"Room {room_id} doesn't exists")
+
+    obj: dict[typing.Any, typing.Any] = r.hgetall(room_id) # pyright: ignore
+    match action["type"]:
+        case "chat":
+            if p_id == obj['p1']:
+                broadcast(
+                    room_id, 
+                    {"type": "chat", "from": "p1", "message": action["message"]}
                 )
-                return False
-
-        return True
-
-    async def connect(self, p_id: str, websocket: WebSocket):
-        if p_id == self.p1:
-            if self.p1_ws:
-                await websocket.send_json(
-                    {
-                        "type": "error",
-                        "message": "You may still connected somewhere else",
-                    }
+            elif p_id == obj['p2']:
+                broadcast(
+                    room_id, 
+                    {"type": "chat", "from": "p2", "message": action["message"]}
                 )
-                await websocket.close()
-                return False
             else:
-                self.p1_ws = websocket
+                raise Exception("You're not a valid payer in this game")
 
-            if self.p2_ws:
-                await self.p2_ws.send_json(
-                    {"type": "chat", "from": "system", "message": "p1 is connected"}
-                )
-            return True
+        case "board":
+            raise Board(obj['board'])
 
-        if p_id == self.p2:
-            if self.p2_ws:
-                await websocket.send_json(
-                    {
-                        "type": "error",
-                        "message": "You may still connected somewhere else",
-                    }
-                )
-                await websocket.close()
-                return False
+        case "move":
+            board = json.loads(obj['board'])
+            turn = obj['turn']
+            if board[ action["pos"] ] != "":
+                raise Exception("invalid move")
+
+            if p_id == obj['p1']:
+                player = "p1"
+            elif p_id == obj['p2']:
+                player = "p2"
             else:
-                self.p2_ws = websocket
+                raise Exception("you're not a valid player in this room")
 
-            if self.p1_ws:
-                await self.p1_ws.send_json(
-                    {"type": "chat", "from": "system", "message": "p2 is connected"}
-                )
-            return True
+            if turn != player:
+                raise Exception("It's not your turn")
 
-        await websocket.send_json(
-            {
-                "type": "error",
-                "message": "You're not a valid player in this room",
-            }
-        )
-        await websocket.close()
-        return False
+            board[action["pos"]] = player
+            new_turn = "p1" if turn == "p2" else "p2"
 
-    async def disconnect(self, p_id: str, websocket: WebSocket):
-        if p_id == self.p1:
-            self.p1_ws = None
-            if self.p2_ws:
-                await self.p2_ws.send_json(
-                    {"type": "chat", "from": "system", "message": "p1 is disconnected"}
-                )
-            return True
-        elif self.p2 and p_id == self.p2:
-            self.p2_ws = None
-            if self.p1_ws:
-                await self.p1_ws.send_json(
-                    {"type": "chat", "from": "system", "message": "p2 is disconnected"}
-                )
-            return True
+            broadcast(room_id, {"type": "board", "board": board})
 
-        await websocket.send_json(
-            {
-                "type": "error",
-                "message": "You're not a valid player in this room",
-            }
-        )
-        await websocket.close()
-        return False
+            r.hmset(room_id, {
+                'board': json.dumps(board),
+                'turn': new_turn,
+            })
 
-    async def broadcast_win(self, character: str, move_set: list[int]):
-        if self.p1_ws:
-            await self.p1_ws.send_json(
-                {
+            _, character, status = check_win(board)
+            if status != None:
+                broadcast(room_id, {
                     "type": "win",
                     "wining": character,
-                    "move_set": move_set,
-                }
-            )
-        if self.p2_ws:
-            await self.p2_ws.send_json(
-                {
-                    "type": "win",
-                    "wining": character,
-                    "move_set": move_set,
-                }
-            )
+                    "move_set": status,
+                })
 
-    async def check_win(self):
-        b = self.board
+        case _:
+            raise Exception(f"{action['type']} is not a valid action")
 
-        for i in [0, 3, 6]:
-            if b[i] == b[i + 1] and b[i + 1] == b[i + 2] and b[i + 2] != "":
-                await self.broadcast_win(b[i], [i, i + 1, i + 2])
-                return True
 
-        for i in [0, 1, 2]:
-            if b[i] == b[i + 3] and b[i + 3] == b[i + 6] and b[i + 6] != "":
-                await self.broadcast_win(b[i], [i, i + 3, i + 6])
-                return True
+def check_win(b):
+    for i in [0, 3, 6]:
+        if b[i] == b[i + 1] and b[i + 1] == b[i + 2] and b[i + 2] != "":
+            return True, b[i], [i, i + 1, i + 2]
 
-        if b[0] == b[4] and b[4] == [8] and b[8] != "":
-            await self.broadcast_win(b[0], [0, 4, 8])
-            return True
+    for i in [0, 1, 2]:
+        if b[i] == b[i + 3] and b[i + 3] == b[i + 6] and b[i + 6] != "":
+            return True, b[i], [i, i + 3, i + 6]
 
-        if b[2] == b[4] and b[4] == [6] and b[6] != "":
-            await self.broadcast_win(b[0], [2, 4, 6])
-            return True
+    if b[0] == b[4] and b[4] == [8] and b[8] != "":
+        return True, b[0], [0, 4, 8]
 
-        return False
+    if b[2] == b[4] and b[4] == [6] and b[6] != "":
+        return True, b[0], [2, 4, 6]
+
+    return False, None, None
+
+def disconnect(room_id: str, p_id: str):
+    if not r.exists(room_id):
+        raise Exception(f"Room {room_id} doesn't exists")
+
+    obj: dict[typing.Any, typing.Any] = r.hgetall(room_id) # pyright: ignore
+    if p_id == obj['p1']:
+        text = 'p1'
+    elif p_id == obj['p2']:
+        text = 'p2'
+    else:
+        raise Exception("You're not a valid player in this room")
+
+    r.hset(room_id, f"{text}_connected", 'false')
+    broadcast(room_id, {"type": "chat", "from": "system", "message": f"{text} is disconnected"})
+
