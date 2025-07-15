@@ -24,5 +24,5 @@ pip install -r requirements.txt
 python3 main.py
 ```
 
-> [!INFO]
+> [!TIP]
 > You can see the various options available for running the server by running the command with the `-h` or `--help` flag.
