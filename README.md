@@ -10,7 +10,16 @@ A tic-tac-toe game server written in Python.
 
 ## Running the server
 
-1. Create a virtual environment:
+1. Clone the repo to your local machine:
+```bash
+git clone https://github.com/GhoulKingR/game-server
+```
+2. Run the docker compose:
+```bash
+docker compose up
+```
+
+<!-- 1. Create a virtual environment:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -26,3 +35,4 @@ python3 main.py
 
 > [!TIP]
 > You can see the various options available for running the server by running the command with the `-h` or `--help` flag.
+-->
