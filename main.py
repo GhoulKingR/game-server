@@ -57,7 +57,7 @@ def display_broadcast(websocket: WebSocket, consumer: KafkaConsumer):
 async def websocket_endpoint(websocket: WebSocket, room_id: str, p_id: str):
     await websocket.accept()
 
-    consumer = KafkaConsumer(room_id, bootstrap_servers="localhost:9092")
+    consumer = KafkaConsumer(room_id, bootstrap_servers="kafka:9092")
     thread = threading.Thread(
         target=display_broadcast,
         args=(websocket, consumer),

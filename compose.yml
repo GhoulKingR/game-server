@@ -1,0 +1,31 @@
+services:
+  redis:
+    image: "redis:8.2-rc1-bookworm"
+    networks:
+      - internal_network
+  kafka:
+    image: apache/kafka:4.1.0-rc0
+    networks:
+      - internal_network
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+  web:
+    build: .
+    networks:
+      - internal_network
+    depends_on:
+      - redis
+      - kafka
+    restart: on-failure
+    ports:
+      - 8000:8000
+networks:
+  internal_network:
+    driver: bridge

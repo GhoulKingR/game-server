@@ -9,9 +9,9 @@ from uuid import uuid4
 from kafka.admin import NewTopic
 from kafka import KafkaProducer, KafkaAdminClient
 
-producer = KafkaProducer(bootstrap_servers="localhost:9092")
-admin_client = KafkaAdminClient(bootstrap_servers="localhost:9092")
-r = redis.Redis(host='localhost', port=6379, decode_responses=True)
+r = redis.Redis(host='redis', port=6379, decode_responses=True)
+producer = KafkaProducer(bootstrap_servers="kafka:9092")
+admin_client = KafkaAdminClient(bootstrap_servers="kafka:9092")
 logger = logging.getLogger(__name__)
 
 def configure_logger():
@@ -28,8 +28,8 @@ def configure_logger():
 
 def _delete_room(room_id: str):
     try:
-        admin_client = KafkaAdminClient(bootstrap_servers="localhost:9092")
-        r = redis.Redis(host='localhost', port=6379, decode_responses=True)
+        admin_client = KafkaAdminClient(bootstrap_servers="kafka:9092")
+        r = redis.Redis(host='redis', port=6379, decode_responses=True)
 
         admin_client.delete_topics(topics=[room_id])
         r.delete(room_id)
