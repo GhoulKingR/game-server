@@ -1,12 +1,8 @@
 services:
   redis:
     image: "redis:8.2-rc1-bookworm"
-    networks:
-      - internal_network
   kafka:
     image: apache/kafka:4.1.0-rc0
-    networks:
-      - internal_network
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
@@ -18,14 +14,14 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
   web:
     build: .
-    networks:
-      - internal_network
     depends_on:
       - redis
       - kafka
     restart: on-failure
+    environment:
+      WEB_NO_ENV: 1
+      WEB_KAFKA_BROKER: kafka:9092
+      WEB_REDIS_HOST: redis
+      WEB_REDIS_PORT: 6379
     ports:
       - 8000:8000
-networks:
-  internal_network:
-    driver: bridge

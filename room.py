@@ -5,30 +5,41 @@ import logging
 import multiprocessing
 import time
 import argparse
+import os
+from dotenv import load_dotenv
 from uuid import uuid4
 from kafka.admin import NewTopic
 from kafka import KafkaProducer, KafkaAdminClient
 
-r = redis.Redis(host='redis', port=6379, decode_responses=True)
-producer = KafkaProducer(bootstrap_servers="kafka:9092")
-admin_client = KafkaAdminClient(bootstrap_servers="kafka:9092")
 logger = logging.getLogger(__name__)
+
+if os.getenv('WEB_NO_ENV', None) == None:
+    logger.info("Loading dot_env file")
+    load_dotenv('.env')
+
+r = redis.Redis(host=os.environ['WEB_REDIS_HOST'], port=int(os.environ['WEB_REDIS_PORT']), decode_responses=True)
+producer = KafkaProducer(bootstrap_servers=os.environ['WEB_KAFKA_BROKER'])
+admin_client = KafkaAdminClient(bootstrap_servers=os.environ['WEB_KAFKA_BROKER'])
 
 def configure_logger():
     parser = argparse.ArgumentParser()
     parser.add_argument("-i", "--info", help="Enable info logger", action="store_true")
     parser.add_argument("-e", "--error", help="Enable error logger", action="store_true")
+    parser.add_argument("-d", "--debug", help="Enable debug logger", action="store_true")
     args = parser.parse_args()
 
     if args.info:
         logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
-    if args.info:
+    if args.error:
         logging.basicConfig(level=logging.ERROR, format='%(levelname)s: %(message)s')
+
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG, format='%(levelname)s: %(message)s')
 
 def _delete_room(room_id: str):
     try:
-        admin_client = KafkaAdminClient(bootstrap_servers="kafka:9092")
+        admin_client = KafkaAdminClient(bootstrap_servers=os.environ['WEB_KAFKA_BROKER'])
         r = redis.Redis(host='redis', port=6379, decode_responses=True)
 
         admin_client.delete_topics(topics=[room_id])

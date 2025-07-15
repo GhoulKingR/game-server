@@ -7,6 +7,7 @@ import json
 import threading
 import logging
 import asyncio
+import os
 
 
 @asynccontextmanager
@@ -56,8 +57,8 @@ def display_broadcast(websocket: WebSocket, consumer: KafkaConsumer):
 @app.websocket("/ws/room/{room_id}/{p_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str, p_id: str):
     await websocket.accept()
-
-    consumer = KafkaConsumer(room_id, bootstrap_servers="kafka:9092")
+    
+    consumer = KafkaConsumer(room_id, bootstrap_servers=os.environ['WEB_KAFKA_BROKER'])
     thread = threading.Thread(
         target=display_broadcast,
         args=(websocket, consumer),
